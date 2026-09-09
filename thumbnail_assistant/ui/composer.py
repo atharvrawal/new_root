@@ -80,6 +80,19 @@ QLabel {{
 }}
 """
 
+# Transient state (sending, recording, failures) sits on the same row as the
+# key hints but in full white, so it reads as the live thing and the hints
+# recede. This row replaced the old status bar at the top of the window.
+_STATUS_STYLE = f"""
+QLabel {{
+    color: {theme.TEXT};
+    font-family: {theme.UI_CSS};
+    font-size: 11px;
+    font-weight: 600;
+    padding: 0 4px;
+}}
+"""
+
 
 class _Edit(QTextEdit):
     """The text area itself. Enter sends, Shift+Enter makes a newline -
@@ -168,12 +181,25 @@ class Composer(QWidget):
 
         outer.addWidget(self._box)
 
-        self._hint = QLabel("")
+        # Footer: live status on the left, static key hints on the right.
+        footer = QHBoxLayout()
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.setSpacing(10)
+
+        self._status = QLabel("")
+        self._status.setStyleSheet(_STATUS_STYLE)
+        footer.addWidget(self._status, 0)
+        footer.addStretch(1)
+
+        self._hint = QLabel("Enter to send  ·  Shift+Enter for a new line")
         self._hint.setStyleSheet(_HINT_STYLE)
-        outer.addWidget(self._hint)
+        footer.addWidget(self._hint, 0)
+
+        outer.addLayout(footer)
 
         self._image_count = 0
-        self._refresh_hint()
+        self._status_text = ""
+        self._refresh_status()
         self._sync_send_enabled()
 
     # -- text, the queued prompt itself ---------------------------------
@@ -208,15 +234,23 @@ class Composer(QWidget):
     # -- attached-image count (a number, never a preview) ----------------
     def set_image_count(self, count: int) -> None:
         self._image_count = count
-        self._refresh_hint()
+        self._refresh_status()
         self._sync_send_enabled()
 
-    def _refresh_hint(self) -> None:
+    def set_status(self, text: str) -> None:
+        """Live state - sending, recording, a failure. Idle wording is
+        dropped rather than shown, so the row is empty when nothing is
+        happening instead of saying so."""
+        self._status_text = "" if text.strip().lower().startswith("ready") else text.strip()
+        self._refresh_status()
+
+    def _refresh_status(self) -> None:
         bits = []
         if self._image_count:
             bits.append(f"{self._image_count} screenshot{'s' if self._image_count != 1 else ''} attached")
-        bits.append("Enter to send  ·  Shift+Enter for a new line")
-        self._hint.setText("   ·   ".join(bits))
+        if self._status_text:
+            bits.append(self._status_text)
+        self._status.setText("   ·   ".join(bits))
 
     def _sync_send_enabled(self) -> None:
         self._send.setEnabled(bool(self._image_count) or bool(self.text().strip()))

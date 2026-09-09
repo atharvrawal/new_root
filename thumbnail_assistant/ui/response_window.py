@@ -37,22 +37,6 @@ _BACKGROUND_STYLE = f"background-color: {theme.BG};"
 # narrow enough that prose lines stay a comfortable length.
 _MAX_COLUMN_WIDTH = 760
 
-_STATUS_BASE = f"""
-QLabel {{
-    font-family: {theme.UI_CSS};
-    font-size: 12px;
-    padding: 8px 14px;
-    border-bottom: 1px solid {theme.BORDER};
-}}
-"""
-# Idle vs. active vs. failed are told apart by brightness and weight, not
-# by hue - dim grey for "nothing queued", full white and bold for anything
-# in flight or failed. Brightness survives the opacity hotkeys; so does the
-# wording, which is what actually names the failure.
-_STATUS_IDLE = _STATUS_BASE + f"QLabel {{ background-color: {theme.BG_RAISED}; color: {theme.TEXT_FAINT}; }}"
-_STATUS_ACTIVE = _STATUS_BASE + f"QLabel {{ background-color: {theme.BG_RAISED}; color: {theme.TEXT}; font-weight: 600; }}"
-_STATUS_ERROR = _STATUS_BASE + f"QLabel {{ background-color: {theme.BORDER}; color: {theme.TEXT}; font-weight: 700; }}"
-
 _SCROLLBAR_STYLE = f"""
 QScrollArea {{ border: none; background-color: {theme.BG}; }}
 QScrollBar:vertical {{
@@ -156,13 +140,6 @@ class ResponseWindow(QMainWindow):
 
         self._scroll.setWidget(self._content)
 
-        # Status bar (queue contents) sits OUTSIDE the scroll area, pinned
-        # to the top, so it's always visible regardless of scroll
-        # position - mirrors the settings window's "Save/Cancel always
-        # reachable" pattern, just for queue visibility instead.
-        self._status_label = QLabel("Ready.")
-        self._status_label.setStyleSheet(_STATUS_IDLE)
-        self._status_label.setWordWrap(True)
         self._message_count = 0
 
         outer = QWidget()
@@ -170,7 +147,6 @@ class ResponseWindow(QMainWindow):
         outer_layout = QVBoxLayout(outer)
         outer_layout.setContentsMargins(0, 0, 0, 0)
         outer_layout.setSpacing(0)
-        outer_layout.addWidget(self._status_label)
         outer_layout.addWidget(self._scroll, 1)
 
         # Composer pinned to the bottom, outside the scroll area, so it
@@ -340,20 +316,11 @@ class ResponseWindow(QMainWindow):
         self._pending_scroll_to_bottom = True
 
     def set_queue_status(self, text: str) -> None:
-        """Update the small status line pinned above the response log
-        showing what's currently queued (image count + prompt preview).
-        Purely visual - the queue itself lives in queue_store.py.
-
-        The bar restyles itself from the text: idle, busy/queued, or
-        failed - by brightness and weight only, no colour."""
-        self._status_label.setText(text)
-        lowered = text.lower()
-        if "fail" in lowered or "no api key" in lowered:
-            self._status_label.setStyleSheet(_STATUS_ERROR)
-        elif lowered.startswith("ready") or "cleared" in lowered or "nothing" in lowered:
-            self._status_label.setStyleSheet(_STATUS_IDLE)
-        else:
-            self._status_label.setStyleSheet(_STATUS_ACTIVE)
+        """Live state (sending, recording, failures). The dedicated status
+        bar that used to sit at the top of the window is gone - it only
+        duplicated what the composer footer already shows, and cost a strip
+        of vertical space on a window that is often deliberately small."""
+        self.composer.set_status(text)
 
     # -- window move/resize/opacity, driven by hotkeys ------------------
     def toggle_visibility(self) -> None:

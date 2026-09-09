@@ -42,8 +42,10 @@ you explicitly send, and sending clears the queue.
 
 The input box is the prompt: whatever it holds is what gets sent, whether you
 typed it there directly or a hotkey put it there. It grows as you type and
-scrolls once it gets tall. Screenshots are shown as a count, never a preview.
-`Capslock+Backspace` throws away the queue and clears the box.
+scrolls once it gets tall. The row beneath it carries everything else — how
+many screenshots are attached, and live state such as sending, recording or a
+failure. Screenshots are a count, never a preview. `Capslock+Backspace` throws
+away the queue and clears the box.
 
 Voice capture (`Ctrl+Alt+V`) is separate: it records the mic (mixed with desktop
 audio via WASAPI loopback, when available), transcribes locally with
