@@ -17,7 +17,8 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, QThread, Signal
+from PySide6.QtGui import QKeyEvent
 
 from .. import capture, constants, voice
 from ..config import ConfigManager
@@ -34,6 +35,36 @@ logger = logging.getLogger(__name__)
 # guessing from Gemini's text response alone. Not cleaned up
 # automatically; it's a handful of small PNGs, safe to delete anytime.
 _DEBUG_SCREENSHOT_DIR = constants.LOCAL_DATA_DIR / "debug_screenshots"
+
+
+# Virtual-key -> Qt key, for the keystrokes that edit rather than type.
+# Anything absent is carried purely by its translated text.
+_VK_TO_QT_KEY = {
+    0x08: Qt.Key.Key_Backspace, 0x09: Qt.Key.Key_Tab,
+    0x0D: Qt.Key.Key_Return, 0x1B: Qt.Key.Key_Escape,
+    0x2E: Qt.Key.Key_Delete, 0x2D: Qt.Key.Key_Insert,
+    0x24: Qt.Key.Key_Home, 0x23: Qt.Key.Key_End,
+    0x21: Qt.Key.Key_PageUp, 0x22: Qt.Key.Key_PageDown,
+    0x25: Qt.Key.Key_Left, 0x26: Qt.Key.Key_Up,
+    0x27: Qt.Key.Key_Right, 0x28: Qt.Key.Key_Down,
+    0x41: Qt.Key.Key_A, 0x43: Qt.Key.Key_C, 0x56: Qt.Key.Key_V,
+    0x58: Qt.Key.Key_X, 0x5A: Qt.Key.Key_Z, 0x59: Qt.Key.Key_Y,
+}
+
+# win32_hotkey's modifier bits -> Qt's. Kept local so win32_hotkey stays
+# free of any Qt dependency.
+_MOD_ALT, _MOD_CONTROL, _MOD_SHIFT = 0x0001, 0x0002, 0x0004
+
+
+def _qt_modifiers(modifiers: int) -> Qt.KeyboardModifier:
+    result = Qt.KeyboardModifier.NoModifier
+    if modifiers & _MOD_SHIFT:
+        result |= Qt.KeyboardModifier.ShiftModifier
+    if modifiers & _MOD_CONTROL:
+        result |= Qt.KeyboardModifier.ControlModifier
+    if modifiers & _MOD_ALT:
+        result |= Qt.KeyboardModifier.AltModifier
+    return result
 
 
 def _png_dimensions(png_bytes: bytes) -> Optional[tuple[int, int]]:
@@ -347,15 +378,30 @@ class AppController(QObject):
         thread.quit()
         thread.wait()
 
-    # -- capture-mode handlers, wired by hotkeys.manager.set_capture_mode_handlers.
-    # Live-typed keystrokes land in the same queued prompt that
-    # insert_configured_prompt writes to, so they reuse the same two
-    # methods (and get the same status-line refresh).
-    def on_capture_char(self, char: str) -> None:
-        self.insert_text(char)
+    # -- capture-mode handlers, wired by hotkeys.manager.set_capture_mode_handlers
+    def on_capture_key(self, vk: int, modifiers: int, text: str) -> None:
+        """One swallowed keystroke, replayed into the composer.
 
-    def on_capture_backspace(self) -> None:
-        self.backspace()
+        Rather than reimplementing text editing, the keystroke is turned
+        back into a QKeyEvent and posted to the composer's text edit, so
+        Qt's own editing does the work: caret movement, selection with
+        Shift, word jumps with Ctrl, Ctrl+V/A/C/Z, Home/End - all of it
+        behaves exactly as it would if the box had focus, because from the
+        widget's point of view it does. Posting also delivers without
+        focus and without stealing it, which is the whole point of the
+        mode.
+        """
+        qt_key = _VK_TO_QT_KEY.get(vk, 0)
+        if not qt_key and not text:
+            return  # a key that neither types nor edits (F13, media keys)
+        self.dispatch(lambda: self._window.composer.post_key(qt_key, _qt_modifiers(modifiers), text))
+
+    def on_capture_mode_changed(self, active: bool) -> None:
+        """Show/hide the capture-mode indicator. Without it there is no way
+        to tell the mode is on: every key is swallowed and no window takes
+        focus, so a keystroke that goes nowhere looks identical to a dead
+        app."""
+        self.dispatch(lambda: self._window.composer.set_capture_mode(active))
 
     # -- voice capture, same start/stop/transcribe/send shape as before -
     # difference: instead of sending into a DOM compose box via

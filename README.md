@@ -33,9 +33,15 @@ you explicitly send, and sending clears the queue.
    queued image goes into the same request.
 2. **Write the prompt** in the input box at the bottom, or:
    - `Capslock+P` — insert the prompt configured in Settings, or
-   - `Capslock+T` — background capture mode: every keystroke is typed live into
-     the input box and swallowed, so it never reaches the focused app.
-     Press `Capslock+T` again to exit. Backspace edits; there is no auto-send.
+   - `Capslock+T` — background capture mode: every keystroke is swallowed and
+     typed into the input box instead, without the window ever taking focus.
+     Press `Capslock+T` again to exit. While it is on, the input box gets a
+     white border and a `CAPTURE MODE` badge.
+
+     Editing works as it would if the box had focus, because the keystrokes
+     are replayed to it as real key events: arrows and Home/End move the
+     caret, Shift selects, Ctrl+A/C/V/X/Z do the usual, and held keys repeat.
+     Characters come from your actual keyboard layout, not a US-only table.
 3. **Send** — `Capslock+Enter` from anywhere, or `Enter` when the window has
    focus (`Shift+Enter` makes a new line). Bundles every queued screenshot plus
    the prompt into one Gemini call and appends the response.
@@ -123,12 +129,8 @@ each text/vision model and reports OK / quota-blocked / unavailable.
   screen reader.
 - **A low-level keyboard hook** is how hotkeys stay pass-through. Anti-cheat and
   EDR software sometimes flag or block that.
-- **US QWERTY only** for background capture mode — the vk-to-character table is
-  static, so non-US layouts will produce wrong characters for keys that differ.
 - **True exclusive-fullscreen games** bypass the compositor entirely and cannot
   be overlaid by any window, including this one. Borderless windowed works.
-- **Held-key auto-repeat is not replayed** in capture mode: holding a key types
-  one character, not many.
 
 ## Packaging
 

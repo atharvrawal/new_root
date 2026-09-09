@@ -18,9 +18,10 @@ the text up to ``_MAX_HEIGHT``, then stops growing and scrolls internally.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QTextCursor
+from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtGui import QKeyEvent, QTextCursor
 from PySide6.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -83,6 +84,31 @@ QLabel {{
 # Transient state (sending, recording, failures) sits on the same row as the
 # key hints but in full white, so it reads as the live thing and the hints
 # recede. This row replaced the old status bar at the top of the window.
+# Capture mode gets a white border and a filled badge. It has to be
+# unmistakable: with every key swallowed and no window focused, "capture
+# mode is on" and "the app is frozen" look identical otherwise.
+_BOX_STYLE_IDLE = (
+    f"#composerBox {{ background-color: {theme.BG_RAISED};"
+    f" border: 1px solid {theme.BORDER}; border-radius: 14px; }}"
+)
+_BOX_STYLE_CAPTURING = (
+    f"#composerBox {{ background-color: {theme.BG_RAISED};"
+    f" border: 2px solid {theme.TEXT}; border-radius: 14px; }}"
+)
+
+_BADGE_STYLE = f"""
+QLabel {{
+    background-color: {theme.TEXT};
+    color: #000000;
+    font-family: {theme.UI_CSS};
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    padding: 2px 8px;
+    border-radius: 7px;
+}}
+"""
+
 _STATUS_STYLE = f"""
 QLabel {{
     color: {theme.TEXT};
@@ -159,10 +185,7 @@ class Composer(QWidget):
         # this frame only and not to every descendant widget.
         self._box = QWidget()
         self._box.setObjectName("composerBox")
-        self._box.setStyleSheet(
-            f"#composerBox {{ background-color: {theme.BG_RAISED};"
-            f" border: 1px solid {theme.BORDER}; border-radius: 14px; }}"
-        )
+        self._box.setStyleSheet(_BOX_STYLE_IDLE)
         box_layout = QHBoxLayout(self._box)
         box_layout.setContentsMargins(14, 10, 10, 10)
         box_layout.setSpacing(10)
@@ -185,6 +208,11 @@ class Composer(QWidget):
         footer = QHBoxLayout()
         footer.setContentsMargins(0, 0, 0, 0)
         footer.setSpacing(10)
+
+        self._badge = QLabel("CAPTURE MODE")
+        self._badge.setStyleSheet(_BADGE_STYLE)
+        self._badge.hide()
+        footer.addWidget(self._badge, 0)
 
         self._status = QLabel("")
         self._status.setStyleSheet(_STATUS_STYLE)
@@ -230,6 +258,38 @@ class Composer(QWidget):
 
     def focus_input(self) -> None:
         self._edit.setFocus()
+
+    # -- background capture mode ----------------------------------------
+    def post_key(self, qt_key: int, modifiers: Qt.KeyboardModifier, text: str) -> None:
+        """Replay one captured keystroke into the text area.
+
+        Posted rather than applied by hand so Qt's own editing does the
+        work - selection, word jumps, Ctrl+V/A/Z, Home/End all behave
+        normally. postEvent delivers straight to this widget, so it needs
+        no focus and steals none.
+        """
+        app = QApplication.instance()
+        if app is None:
+            return
+        # Enter is the send gesture, not a newline, matching what typing
+        # into the box directly does (_Edit.keyPressEvent).
+        if qt_key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not (
+            modifiers & Qt.KeyboardModifier.ShiftModifier
+        ):
+            self.submitted.emit()
+            return
+        app.postEvent(
+            self._edit, QKeyEvent(QEvent.Type.KeyPress, qt_key, modifiers, text)
+        )
+
+    def set_capture_mode(self, active: bool) -> None:
+        self._box.setStyleSheet(_BOX_STYLE_CAPTURING if active else _BOX_STYLE_IDLE)
+        self._badge.setVisible(active)
+        self._edit.setPlaceholderText(
+            "Capture mode on - every keystroke is typed here. Press the toggle again to stop."
+            if active
+            else "Type a prompt, or press your insert-prompt hotkey..."
+        )
 
     # -- attached-image count (a number, never a preview) ----------------
     def set_image_count(self, count: int) -> None:

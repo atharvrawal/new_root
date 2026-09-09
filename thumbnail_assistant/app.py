@@ -99,9 +99,12 @@ class Application:
         # Background capture mode: every keystroke while active is typed
         # live into the queued prompt (AppController.on_capture_char) - no
         # buffering, no auto-send when toggled off.
+        # These two already marshal onto the main thread themselves, and
+        # are deliberately called straight from the hook thread: wrapping
+        # them in another dispatch would add a hop without adding safety.
         self.hotkey_manager.set_capture_mode_handlers(
-            on_char=lambda ch: ac.dispatch(lambda: ac.on_capture_char(ch)),
-            on_backspace=lambda: ac.dispatch(ac.on_capture_backspace),
+            on_key=ac.on_capture_key,
+            on_mode_changed=ac.on_capture_mode_changed,
         )
 
         on_main("move_up", ac.move_up)

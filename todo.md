@@ -108,12 +108,6 @@ the status line stays on "Sending..." with no way to cancel.
 
 ## 5. Smaller things
 
-- [ ] **Non-US keyboard layouts** produce wrong characters in background capture
-      mode — the vk→char table in `win32_hotkey.py` is a static US QWERTY map.
-      Fixing properly means `ToUnicodeEx` against the active layout.
-- [ ] **Held keys don't repeat** in capture mode (auto-repeat is suppressed for
-      all keys). Holding Backspace deletes one character. Deliberate, but
-      surprising.
 - [ ] **Two UI toolkits**: the main window is PySide6, the settings dialog is
       tkinter on its own thread with its own mainloop. It works, but it's an
       odd seam and the dialog looks nothing like the app.
