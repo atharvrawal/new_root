@@ -87,6 +87,9 @@ class AppController(QObject):
         self._config_manager = config_manager
         self._queue = ImageQueue()
         self._window = ResponseWindow()
+        # Enter (or the send button) in the composer runs exactly the same
+        # path as the send hotkey - one send implementation, two triggers.
+        self._window.composer.submitted.connect(self.send_message)
         self._voice_recorder = voice.VoiceRecorder()
         self._mic_device_provider: Optional[Callable[[], Optional[int]]] = None
         self._voice_prompt_provider: Optional[Callable[[], Optional[str]]] = None
@@ -231,15 +234,16 @@ class AppController(QObject):
 
     def insert_text(self, text: str) -> None:
         """Used both for insert_configured_prompt's whole-string insert
-        and (via on_capture_char) capture mode's per-character
-        live typing."""
-        logger.info("insert_text: appending %d char(s) to queued prompt.", len(text))
-        self._queue.append_prompt_text(text)
-        self._refresh_queue_status()
+        and (via on_capture_char) capture mode's per-character live
+        typing. Both land in the composer, which is where the queued
+        prompt now lives."""
+        if not text:
+            return
+        logger.info("insert_text: appending %d char(s) to the composer.", len(text))
+        self._window.composer.append(text)
 
     def backspace(self) -> None:
-        self._queue.backspace_prompt()
-        self._refresh_queue_status()
+        self._window.composer.backspace()
 
     def clear_queue(self) -> None:
         """Discard queued screenshots and prompt text without sending.
@@ -248,24 +252,27 @@ class AppController(QObject):
         logger.info(
             "clear_queue: discarding %d image(s) and %d prompt char(s).",
             self._queue.image_count(),
-            len(self._queue.peek_prompt()),
+            len(self._window.composer.text()),
         )
         self._queue.clear()
+        self._window.composer.clear()
+        self._refresh_queue_status()
         self._window.set_queue_status("Queue cleared.")
 
     def send_message(self) -> None:
         """Bundle whatever's queued (auto-clears the queue) and fire the
         Gemini call off the main thread."""
+        prompt = self._window.composer.text()
         logger.info(
-            "send_message: fired. Queue has %d image(s), prompt=%r",
+            "send_message: fired. Queue has %d image(s), prompt is %d char(s).",
             self._queue.image_count(),
-            self._queue.peek_prompt(),
+            len(prompt),
         )
-        batch = self._queue.pop_all()
-        if batch is None:
+        if not self._queue.image_count() and not prompt.strip():
             logger.warning("send_message: nothing queued; ignoring.")
-            self._window.set_queue_status("Nothing was queued - capture a screenshot or insert a prompt first.")
+            self._window.set_queue_status("Nothing to send - type a prompt or capture a screenshot first.")
             return
+        images = self._queue.pop_all()
         cfg = self._config_manager.config
         if not cfg.gemini_api_key:
             logger.warning("send_message: no Gemini API key configured.")
@@ -273,28 +280,26 @@ class AppController(QObject):
                 "No Gemini API key configured. Open Settings (Ctrl+Alt+S) and add one.",
                 is_error=True,
             )
-            self._window.set_queue_status("Queue empty (send failed - no API key).")
+            self._window.set_queue_status("Send failed - no API key configured.")
             return
+        # Echo what was sent, then clear the composer - same as the web
+        # chat UIs, and it's the only record of the prompt once it's gone.
+        self._window.append_prompt_echo(prompt, image_count=len(images))
+        self._window.composer.clear()
+        self._refresh_queue_status()
         self._window.set_queue_status(
-            f"Sending {len(batch.images_base64)} image(s) + prompt to Gemini..."
+            f"Sending {len(images)} image(s) + prompt to Gemini..."
         )
-        self._dispatch_send(batch.images_base64, batch.prompt_text, cfg.gemini_api_key, cfg.gemini_model)
+        self._dispatch_send(images, prompt, cfg.gemini_api_key, cfg.gemini_model)
 
     def _refresh_queue_status(self) -> None:
+        """The composer shows the prompt itself now, so the status line
+        only has to report the screenshot count."""
         count = self._queue.image_count()
-        prompt = self._queue.peek_prompt()
-        if count == 0 and not prompt.strip():
-            self._window.set_queue_status("Queue empty.")
-            return
-        preview = prompt.strip()
-        if len(preview) > 80:
-            preview = preview[:80] + "..."
-        parts = []
-        if count:
-            parts.append(f"{count} image(s) queued")
-        if preview:
-            parts.append(f'prompt: "{preview}"')
-        self._window.set_queue_status(" | ".join(parts))
+        self._window.composer.set_image_count(count)
+        self._window.set_queue_status(
+            f"{count} screenshot(s) attached." if count else "Ready."
+        )
 
     def _dispatch_send(self, images_base64, prompt_text, api_key, model) -> None:
         logger.info(

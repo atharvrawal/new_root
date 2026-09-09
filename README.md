@@ -31,16 +31,21 @@ you explicitly send, and sending clears the queue.
 
 1. **Queue a screenshot** (`Ctrl+Alt+G`) — as many times as you like; every
    queued image goes into the same request.
-2. **Queue prompt text**, by either:
+2. **Write the prompt** in the input box at the bottom, or:
    - `Capslock+P` — insert the prompt configured in Settings, or
    - `Capslock+T` — background capture mode: every keystroke is typed live into
-     the queued prompt and swallowed, so it never reaches the focused app.
+     the input box and swallowed, so it never reaches the focused app.
      Press `Capslock+T` again to exit. Backspace edits; there is no auto-send.
-3. **Send** (`Capslock+Enter`) — bundles every queued image plus the prompt into
-   one Gemini call and appends the response to the log.
+3. **Send** — `Capslock+Enter` from anywhere, or `Enter` when the window has
+   focus (`Shift+Enter` makes a new line). Bundles every queued screenshot plus
+   the prompt into one Gemini call and appends the response.
 
-The status line above the log always shows what is currently queued.
-`Capslock+Backspace` throws the queue away without sending.
+The input box is the prompt: whatever it holds is what gets sent, whether you
+typed it there directly or a hotkey put it there. It grows as you type and
+scrolls once it gets tall. The row beneath it carries everything else — how
+many screenshots are attached, and live state such as sending, recording or a
+failure. Screenshots are a count, never a preview. `Capslock+Backspace` throws
+away the queue and clears the box.
 
 Voice capture (`Ctrl+Alt+V`) is separate: it records the mic (mixed with desktop
 audio via WASAPI loopback, when available), transcribes locally with
