@@ -293,13 +293,11 @@ class AppController(QObject):
         self._dispatch_send(images, prompt, cfg.gemini_api_key, cfg.gemini_model)
 
     def _refresh_queue_status(self) -> None:
-        """The composer shows the prompt itself now, so the status line
-        only has to report the screenshot count."""
-        count = self._queue.image_count()
-        self._window.composer.set_image_count(count)
-        self._window.set_queue_status(
-            f"{count} screenshot(s) attached." if count else "Ready."
-        )
+        """Hand the screenshot count to the composer, which owns how it is
+        displayed. Deliberately does NOT also push the count through
+        set_queue_status: the footer would then render the same fact twice,
+        once from the count and once as a status message."""
+        self._window.composer.set_image_count(self._queue.image_count())
 
     def _dispatch_send(self, images_base64, prompt_text, api_key, model) -> None:
         logger.info(
@@ -338,7 +336,9 @@ class AppController(QObject):
         worker = self.sender()
         logger.info("_on_send_finished: received Gemini result (is_error=%s).", is_error)
         self._window.append_response(text, is_error=is_error)
-        self._window.set_queue_status("Queue empty.")
+        # "Ready" is the idle sentinel the composer drops, so this clears
+        # the "Sending..." line rather than replacing it with new text.
+        self._window.set_queue_status("Ready.")
         pair = self._active.pop(id(worker), None)
         if pair is None:
             logger.warning("_on_send_finished: could not find matching thread for worker; skipping cleanup.")
