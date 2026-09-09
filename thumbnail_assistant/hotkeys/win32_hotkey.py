@@ -76,6 +76,12 @@ logger = logging.getLogger(__name__)
 user32 = ctypes.WinDLL("user32", use_last_error=True) if hasattr(ctypes, "WinDLL") else None
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True) if hasattr(ctypes, "WinDLL") else None
 
+# Modifier bit values. Declared before the VK tables above need them; the
+# public MOD_* names below alias these.
+MOD_ALT_BIT = 0x0001
+MOD_CONTROL_BIT = 0x0002
+MOD_SHIFT_BIT = 0x0004
+
 WM_KEYDOWN = 0x0100
 WM_KEYUP = 0x0101
 WM_SYSKEYDOWN = 0x0104
@@ -103,6 +109,22 @@ VK_V = 0x56
 VK_RETURN = 0x0D
 VK_BACK = 0x08  # Backspace, used to edit live during background capture mode
 
+# A low-level hook reports the SIDED virtual keys for modifiers (VK_LSHIFT,
+# not VK_SHIFT), so these are what actually turn up in _keys_down.
+VK_LSHIFT, VK_RSHIFT = 0xA0, 0xA1
+VK_LCONTROL, VK_RCONTROL = 0xA2, 0xA3
+VK_LMENU, VK_RMENU = 0xA4, 0xA5
+
+_SIDED_MODIFIERS = {
+    VK_LSHIFT: MOD_SHIFT_BIT, VK_RSHIFT: MOD_SHIFT_BIT,
+    VK_LCONTROL: MOD_CONTROL_BIT, VK_RCONTROL: MOD_CONTROL_BIT,
+    VK_LMENU: MOD_ALT_BIT, VK_RMENU: MOD_ALT_BIT,
+    VK_SHIFT: MOD_SHIFT_BIT, VK_CONTROL: MOD_CONTROL_BIT, VK_MENU: MOD_ALT_BIT,
+}
+
+# Keys that are modifiers themselves - they never produce typed text.
+_MODIFIER_VKS = frozenset(_SIDED_MODIFIERS) | {VK_LWIN, VK_RWIN, VK_CAPITAL}
+
 # Keys in this set are swallowed (never passed to CallNextHookEx) when they
 # match a registered hotkey - i.e. only when actually used as a hotkey.
 # These are the keys where leaking the keystroke through to the focused app
@@ -118,9 +140,9 @@ _SWALLOWABLE_VKS = {
     VK_S, VK_RETURN, VK_P, VK_V
 }
 
-MOD_ALT = 0x0001
-MOD_CONTROL = 0x0002
-MOD_SHIFT = 0x0004
+MOD_ALT = MOD_ALT_BIT
+MOD_CONTROL = MOD_CONTROL_BIT
+MOD_SHIFT = MOD_SHIFT_BIT
 MOD_WIN = 0x0008
 MOD_CAPSLOCK = 0x0010
 # Kept only because parse_hotkey() (below) still ORs this into its returned
@@ -205,6 +227,19 @@ def _configure_win32_signatures() -> None:
 
     user32.PostThreadMessageW.argtypes = [wintypes.DWORD, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
     user32.PostThreadMessageW.restype = wintypes.BOOL
+
+    # Layout-aware key -> text translation, for background capture mode.
+    user32.ToUnicodeEx.argtypes = [
+        wintypes.UINT, wintypes.UINT, ctypes.POINTER(ctypes.c_ubyte),
+        wintypes.LPWSTR, ctypes.c_int, wintypes.UINT, wintypes.HKL,
+    ]
+    user32.ToUnicodeEx.restype = ctypes.c_int
+    user32.GetKeyboardLayout.argtypes = [wintypes.DWORD]
+    user32.GetKeyboardLayout.restype = wintypes.HKL
+    user32.GetForegroundWindow.argtypes = []
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.c_void_p]
+    user32.GetWindowThreadProcessId.restype = wintypes.DWORD
 
 
 _configure_win32_signatures()
@@ -293,45 +328,65 @@ class HotkeyParseError(ValueError):
 
 
 # -- capture-mode character translation --------------------------------
-# Used only by "background capture mode" (see Win32HotkeyListener's
-# _capture_* methods below) to turn raw vk codes back into text, since
-# nothing is focused to receive real WM_CHAR translation while it's
-# active. US QWERTY layout only - if you're on a different physical
-# keyboard layout, characters typed during capture mode will come out
-# wrong for whichever keys differ from US QWERTY. Extending this to
-# other layouts would need a real Win32 keyboard-layout API
-# (ToUnicodeEx), not just a bigger static table.
-_VK_CHAR_UNSHIFTED: Dict[int, str] = {}
-_VK_CHAR_SHIFTED: Dict[int, str] = {}
+# Background capture mode swallows every keystroke, so nothing is focused to
+# receive normal WM_CHAR translation and we have to produce the text
+# ourselves. This used to be a hand-written US-QWERTY table, which produced
+# wrong characters on every other layout. ToUnicodeEx asks the user's ACTUAL
+# active layout instead, so AltGr combinations, non-US punctuation and
+# accented characters all come out right.
 
-for _c in range(0x30, 0x3A):  # '0'-'9'
-    _VK_CHAR_UNSHIFTED[_c] = chr(_c)
-_VK_CHAR_SHIFTED.update({
-    0x30: ")", 0x31: "!", 0x32: "@", 0x33: "#", 0x34: "$",
-    0x35: "%", 0x36: "^", 0x37: "&", 0x38: "*", 0x39: "(",
-})
-
-for _c in range(0x41, 0x5B):  # 'A'-'Z' vk codes
-    _VK_CHAR_UNSHIFTED[_c] = chr(_c + 32)  # lowercase
-    _VK_CHAR_SHIFTED[_c] = chr(_c)          # uppercase
-
-_VK_CHAR_UNSHIFTED[0x20] = " "  # space
-
-# vk -> (unshifted, shifted), US layout
-_OEM_CHAR_PAIRS = {
-    0xC0: ("`", "~"), 0xBD: ("-", "_"), 0xBB: ("=", "+"),
-    0xDB: ("[", "{"), 0xDD: ("]", "}"), 0xDC: ("\\", "|"),
-    0xBA: (";", ":"), 0xDE: ("'", "\""), 0xBC: (",", "<"),
-    0xBE: (".", ">"), 0xBF: ("/", "?"),
-}
-for _vk, (_un, _sh) in _OEM_CHAR_PAIRS.items():
-    _VK_CHAR_UNSHIFTED[_vk] = _un
-    _VK_CHAR_SHIFTED[_vk] = _sh
+_TOUNICODE_NO_KEYSTATE_CHANGE = 0x4  # Win10 1607+: translate without
+                                     # consuming/altering dead-key state
 
 
-def _vk_to_char(vk: int, shifted: bool) -> Optional[str]:
-    table = _VK_CHAR_SHIFTED if shifted else _VK_CHAR_UNSHIFTED
-    return table.get(vk)
+def _foreground_layout() -> int:
+    """Keyboard layout (HKL) of whatever window currently has focus. Layout
+    is per-thread on Windows, so the layout of OUR thread is not necessarily
+    the one the user is typing in."""
+    try:
+        hwnd = user32.GetForegroundWindow()
+        thread_id = user32.GetWindowThreadProcessId(hwnd, None) if hwnd else 0
+        return user32.GetKeyboardLayout(thread_id)
+    except Exception:
+        return 0
+
+
+def _vk_to_text(vk: int, scan_code: int, modifiers: int) -> str:
+    """Translate a keypress to the text it would produce, or "" if it
+    produces none (a modifier, a function key, a dead key).
+
+    Ctrl-without-Alt is deliberately excluded: ToUnicodeEx maps Ctrl+A to
+    the control character \x01, which must not be inserted as text. Those
+    are passed on as key codes so they can act as shortcuts instead.
+    Ctrl+Alt together is AltGr, which legitimately produces text.
+    """
+    if user32 is None or vk in _MODIFIER_VKS:
+        return ""
+    ctrl = bool(modifiers & MOD_CONTROL)
+    alt = bool(modifiers & MOD_ALT)
+    if ctrl and not alt:
+        return ""
+
+    try:
+        state = (ctypes.c_ubyte * 256)()
+        if modifiers & MOD_SHIFT:
+            state[VK_SHIFT] = 0x80
+        if ctrl:
+            state[VK_CONTROL] = 0x80
+        if alt:
+            state[VK_MENU] = 0x80
+
+        buf = ctypes.create_unicode_buffer(8)
+        count = user32.ToUnicodeEx(
+            vk, scan_code, state, buf, len(buf) - 1,
+            _TOUNICODE_NO_KEYSTATE_CHANGE, _foreground_layout(),
+        )
+        # count < 0 is a dead key; with the no-change flag set it leaves no
+        # residue, and there is nothing to insert yet either way.
+        return buf.value[:count] if count > 0 else ""
+    except Exception:
+        logger.exception("ToUnicodeEx failed for vk=%s; no text produced.", vk)
+        return ""
 
 
 def parse_hotkey(spec: str) -> tuple[int, int]:
@@ -393,8 +448,8 @@ class Win32HotkeyListener:
         self._capture_mode: bool = False
         self._capture_toggle_mods: Optional[int] = None
         self._capture_toggle_vk: Optional[int] = None
-        self._capture_on_char: Optional[Callable[[str], None]] = None
-        self._capture_on_backspace: Optional[Callable[[], None]] = None
+        self._capture_on_key: Optional[Callable[[int, int, str], None]] = None
+        self._capture_on_mode_changed: Optional[Callable[[bool], None]] = None
         self._lock = threading.RLock()
         self._ready = threading.Event()
         self._hookproc_ref = None  # keep ctypes callback alive
@@ -456,17 +511,24 @@ class Win32HotkeyListener:
     def set_capture_mode_toggle(
         self,
         hotkey_spec: str,
-        on_char: Callable[[str], None],
-        on_backspace: Callable[[], None],
+        on_key: Callable[[int, int, str], None],
+        on_mode_changed: Optional[Callable[[bool], None]] = None,
     ) -> bool:
-        """Register the hotkey that toggles "background capture mode" -
-        while active, every keystroke is swallowed (never reaches the
-        focused app) and forwarded LIVE, one keystroke at a time: regular
-        characters go through ``on_char``, Backspace goes through
-        ``on_backspace``. There is no internal buffer and no action taken
-        on toggle-OFF beyond stopping that forwarding - whatever ``on_char``
-        does with each character (e.g. typing it into a page's compose box)
-        is the only place the text ever lives.
+        """Register the hotkey that toggles "background capture mode".
+
+        While active, every keystroke is swallowed (never reaches the
+        focused app) and forwarded live to ``on_key(vk, modifiers, text)``:
+        ``text`` is what the key would type on the user's actual layout
+        ("" for keys that type nothing, like Backspace or the arrows), and
+        ``vk``/``modifiers`` are the raw codes so the receiver can act on
+        editing keys and shortcuts. There is no internal buffer - whatever
+        ``on_key`` does with each keystroke is the only place the text goes.
+
+        ``on_mode_changed`` is called with True/False whenever the mode
+        flips, so the UI can show that keystrokes are being captured. That
+        matters more than it sounds: with every key swallowed and no focus
+        taken, there is otherwise no way to tell capture mode is on except
+        by typing and looking.
 
         Separate from register() (rather than an ordinary hotkey) because
         its behavior is fundamentally different - it doesn't fire once, it
@@ -487,10 +549,14 @@ class Win32HotkeyListener:
         with self._lock:
             self._capture_toggle_mods = modifiers
             self._capture_toggle_vk = vk
-            self._capture_on_char = on_char
-            self._capture_on_backspace = on_backspace
+            self._capture_on_key = on_key
+            self._capture_on_mode_changed = on_mode_changed
         logger.info("Registered capture-mode toggle -> %s", hotkey_spec)
         return True
+
+    @property
+    def capture_mode(self) -> bool:
+        return self._capture_mode
 
     def _toggle_capture_mode(self) -> None:
         self._capture_mode = not self._capture_mode
@@ -498,40 +564,30 @@ class Win32HotkeyListener:
             logger.info("Capture mode ON - keystrokes are being typed live, silently.")
         else:
             logger.info("Capture mode OFF - back to normal hotkey behavior.")
+        if self._capture_on_mode_changed is not None:
+            try:
+                self._capture_on_mode_changed(self._capture_mode)
+            except Exception:
+                logger.exception("Capture-mode change callback raised.")
 
-    def _handle_capture_keydown(self, vk: int, modifiers: int) -> None:
-        """Forwards one keydown live - no buffer, nothing held back for
-        toggle-off. Held-key auto-repeat is not replayed here (repeats are
-        suppressed for all keys at the _low_level_keyboard_proc level,
-        same as every other hotkey in this module) - holding Backspace or
-        a letter down only registers once, not repeatedly. Known
-        limitation, not a bug."""
-        if vk == VK_BACK:
-            if self._capture_on_backspace is not None:
-                threading.Thread(
-                    target=self._invoke_capture_backspace, name="CaptureModeBackspace", daemon=True
-                ).start()
+    def _handle_capture_keydown(self, vk: int, modifiers: int, scan_code: int) -> None:
+        """Forward one keystroke live - no buffer, nothing held back for
+        toggle-off.
+
+        Called DIRECTLY on the hook thread rather than on a spawned thread.
+        The previous version started a new thread per keystroke, which put
+        the characters in a race with each other: typing quickly could
+        deliver them out of order and scramble the text. The receiver only
+        queues the keystroke (it does not block), so the hook stays fast,
+        and calling in-line is what guarantees the order is kept.
+        """
+        if self._capture_on_key is None or vk in _MODIFIER_VKS:
             return
-        if vk == VK_RETURN:
-            char = "\n"
-        else:
-            char = _vk_to_char(vk, shifted=bool(modifiers & MOD_SHIFT))
-        if char is not None and self._capture_on_char is not None:
-            threading.Thread(
-                target=self._invoke_capture_char, args=(char,), name="CaptureModeChar", daemon=True
-            ).start()
-
-    def _invoke_capture_char(self, char: str) -> None:
+        text = _vk_to_text(vk, scan_code, modifiers)
         try:
-            self._capture_on_char(char)
+            self._capture_on_key(vk, modifiers, text)
         except Exception:
-            logger.exception("Capture-mode on_char callback raised an exception.")
-
-    def _invoke_capture_backspace(self) -> None:
-        try:
-            self._capture_on_backspace()
-        except Exception:
-            logger.exception("Capture-mode on_backspace callback raised an exception.")
+            logger.exception("Capture-mode on_key callback raised an exception.")
 
     # -- internals ---------------------------------------------------------
     def _current_modifier_state(self) -> int:
@@ -549,6 +605,14 @@ class Win32HotkeyListener:
             modifiers |= MOD_WIN
         if VK_CAPITAL in self._keys_down:
             modifiers |= MOD_CAPSLOCK
+        # Also derive them from the keys we've tracked ourselves. In capture
+        # mode every key is swallowed, including Shift - and a swallowed key
+        # never reaches the OS state that GetAsyncKeyState reports, so
+        # without this Shift+letter would come out lowercase.
+        for held in self._keys_down:
+            bit = _SIDED_MODIFIERS.get(held)
+            if bit:
+                modifiers |= bit
         return modifiers
 
     def _handle_keydown(self, vk: int) -> bool:
@@ -629,18 +693,22 @@ class Win32HotkeyListener:
                                 self._swallowed_keyups_pending.add(vk)
                             elif self._capture_mode:
                                 # Swallow-everything mode: every other key
-                                # becomes buffered text instead of a normal
+                                # becomes typed text instead of a normal
                                 # hotkey action.
-                                self._handle_capture_keydown(vk, current_mods)
+                                self._handle_capture_keydown(vk, current_mods, kb.scanCode)
                                 swallow = True
                                 self._swallowed_keyups_pending.add(vk)
                             elif self._handle_keydown(vk):
                                 swallow = True
                         elif self._capture_mode:
-                            # Held-key auto-repeat: not replayed into the
-                            # buffer (see _handle_capture_keydown's
-                            # docstring), but still must never leak through
-                            # to the focused app while capture mode is on.
+                            # Held-key auto-repeat IS replayed now. Holding
+                            # Backspace to delete a run of text, or holding
+                            # a letter, is ordinary typing behaviour; the
+                            # old version dropped repeats, so a held key
+                            # registered exactly once.
+                            self._handle_capture_keydown(
+                                vk, self._current_modifier_state(), kb.scanCode
+                            )
                             swallow = True
 
                 elif wParam in (WM_KEYUP, WM_SYSKEYUP):

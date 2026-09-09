@@ -15,6 +15,7 @@ import sys
 from thumbnail_assistant import constants, voice
 from thumbnail_assistant.config import AppConfig
 from thumbnail_assistant.hotkeys.win32_hotkey import (
+    _vk_to_text,
     MOD_ALT,
     MOD_CAPSLOCK,
     MOD_CONTROL,
@@ -61,6 +62,29 @@ def test_every_default_hotkey_parses():
         parse_hotkey(spec)  # raises if malformed
         assert name in constants.CORE_ACTION_LABELS, f"{name} has no settings-window label"
     assert set(constants.CORE_ACTION_LABELS) == set(constants.DEFAULT_HOTKEYS)
+
+
+def test_capture_mode_translation():
+    """Background capture mode turns raw virtual keys back into text via
+    the user's real keyboard layout (ToUnicodeEx). Windows-only."""
+    if not constants.IS_WINDOWS:
+        return
+    VK_A, VK_1, VK_BACK, VK_LEFT, VK_SHIFT_KEY = 0x41, 0x31, 0x08, 0x25, 0x10
+    scan = 0  # ToUnicodeEx resolves the scan code itself when given 0
+
+    assert _vk_to_text(VK_A, scan, 0) == "a"
+    assert _vk_to_text(VK_A, scan, MOD_SHIFT) == "A"
+    assert _vk_to_text(VK_1, scan, 0) == "1"
+
+    # Ctrl+A must NOT produce text: ToUnicodeEx maps it to the control
+    # character , which would otherwise be inserted into the prompt.
+    # It is passed on as a key code so it can act as select-all instead.
+    assert _vk_to_text(VK_A, scan, MOD_CONTROL) == ""
+
+    # Editing keys and modifiers type nothing.
+    assert _vk_to_text(VK_LEFT, scan, 0) == ""
+    assert _vk_to_text(VK_SHIFT_KEY, scan, 0) == ""
+    assert _vk_to_text(VK_BACK, scan, 0) in ("", "")
 
 
 def test_queue():
