@@ -64,31 +64,24 @@ def test_every_default_hotkey_parses():
 
 
 def test_queue():
+    """The queue holds screenshots only - prompt text lives in the
+    composer widget now (ui/composer.py)."""
     q = ImageQueue()
-    assert q.is_empty() and q.pop_all() is None
-
-    q.append_prompt_text("hel")
-    q.append_prompt_text("llo")
-    q.backspace_prompt()
-    q.backspace_prompt()
-    assert q.peek_prompt() == "hell"
+    assert q.image_count() == 0
+    assert q.pop_all() == []
 
     q.add_image("aaa")
     assert q.add_image("bbb") == 2
-    assert not q.is_empty()
+    assert q.image_count() == 2
 
-    batch = q.pop_all()
-    assert batch.images_base64 == ["aaa", "bbb"]
-    assert batch.prompt_text == "hell"
+    assert q.pop_all() == ["aaa", "bbb"]
     # pop_all auto-clears, so an immediate second send has nothing to send.
-    assert q.is_empty() and q.pop_all() is None
+    assert q.image_count() == 0
+    assert q.pop_all() == []
 
-    # Whitespace-only text is not something worth firing an API call for.
-    q.append_prompt_text("   \n ")
-    assert q.is_empty() and q.pop_all() is None
-
-    # Backspacing an empty queue must not raise or underflow.
-    ImageQueue().backspace_prompt()
+    q.add_image("ccc")
+    q.clear()
+    assert q.image_count() == 0
 
 
 def test_config_roundtrip():

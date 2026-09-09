@@ -1,36 +1,31 @@
-"""In-memory image + prompt queue.
+"""In-memory screenshot queue.
 
-Holds the state shared between the decoupled actions (capture,
-insert-prompt, clear, send). Nothing here touches disk or the network -
-it's just a small piece of shared state that
+Holds the screenshots captured between sends. Nothing here touches disk or
+the network - it's a small piece of shared state that
 ``ui/app_controller.py`` owns and mutates from hotkey callbacks, then reads
 (and clears) when ``send_message`` fires.
 
-Thread-safety note: hotkey callbacks arrive on the win32_hotkey.py
-listener thread, not the Qt main thread. All mutation here is guarded by
-a single lock so concurrent capture/insert/send calls can't interleave
-and corrupt the list/string.
+Prompt text used to live here too, invisibly, with the status bar showing a
+truncated preview. It now lives in the composer widget
+(``ui/composer.py``), where it is visible and editable, so this class holds
+images only - one copy of each thing, nothing to keep in sync.
+
+Thread-safety note: hotkey callbacks originate on the win32_hotkey.py
+listener thread. They are marshaled onto the Qt main thread before reaching
+this class (see ``AppController.dispatch``), but the lock is kept anyway -
+it is cheap, and it means this class is still correct if something ever
+calls it directly from another thread.
 """
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
-
-
-@dataclass
-class QueuedBatch:
-    """A snapshot of what was queued at the moment of send - what actually
-    gets bundled into one Gemini API call."""
-    images_base64: List[str] = field(default_factory=list)
-    prompt_text: str = ""
+from typing import List
 
 
 class ImageQueue:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._images: List[str] = []
-        self._prompt_parts: List[str] = []
 
     def add_image(self, png_base64: str) -> int:
         """Queue a screenshot (base64 PNG). Returns the new queue length."""
@@ -38,56 +33,20 @@ class ImageQueue:
             self._images.append(png_base64)
             return len(self._images)
 
-    def append_prompt_text(self, text: str) -> None:
-        """Append text to the queued prompt - used by both
-        insert_configured_prompt (whole string at once) and the
-        Capslock+T live-typing handlers (one character at a time)."""
-        if not text:
-            return
-        with self._lock:
-            self._prompt_parts.append(text)
-
-    def backspace_prompt(self) -> None:
-        """Remove the last character of the queued prompt, so Backspace
-        works while live-typing in background capture mode."""
-        with self._lock:
-            if not self._prompt_parts:
-                return
-            joined = "".join(self._prompt_parts)
-            if not joined:
-                return
-            self._prompt_parts = [joined[:-1]]
-
-    def peek_prompt(self) -> str:
-        with self._lock:
-            return "".join(self._prompt_parts)
-
     def image_count(self) -> int:
         with self._lock:
             return len(self._images)
 
-    def is_empty(self) -> bool:
-        with self._lock:
-            return not self._images and not "".join(self._prompt_parts).strip()
-
-    def pop_all(self) -> Optional[QueuedBatch]:
+    def pop_all(self) -> List[str]:
         """Atomically snapshot and clear the queue (auto-clear-on-send).
-        Returns None if there's nothing to send (no images and no prompt
-        text) so callers can skip firing an empty API call."""
+        Returns an empty list if nothing was queued."""
         with self._lock:
-            if not self._images and not "".join(self._prompt_parts).strip():
-                return None
-            batch = QueuedBatch(
-                images_base64=self._images,
-                prompt_text="".join(self._prompt_parts),
-            )
+            images = self._images
             self._images = []
-            self._prompt_parts = []
-            return batch
+            return images
 
     def clear(self) -> None:
         """Explicit manual clear, distinct from the auto-clear pop_all()
         does on send - backs the clear_queue hotkey."""
         with self._lock:
             self._images = []
-            self._prompt_parts = []

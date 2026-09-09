@@ -15,7 +15,9 @@ from typing import Callable, Optional
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
+    QHBoxLayout,
     QLabel,
+    QSizePolicy,
     QMainWindow,
     QScrollArea,
     QVBoxLayout,
@@ -24,11 +26,16 @@ from PySide6.QtWidgets import (
 
 from ..window import capture_protection, window_utils
 from . import theme
+from .composer import Composer
 from .message_widget import MessageWidget
 
 logger = logging.getLogger(__name__)
 
 _BACKGROUND_STYLE = f"background-color: {theme.BG};"
+
+# Cap on the transcript column, in px. Wide enough for a code block,
+# narrow enough that prose lines stay a comfortable length.
+_MAX_COLUMN_WIDTH = 760
 
 _STATUS_BASE = f"""
 QLabel {{
@@ -63,6 +70,25 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
 """
 
+_PROMPT_ECHO_STYLE = f"""
+QLabel {{
+    background-color: {theme.BG_RAISED};
+    color: {theme.TEXT_DIM};
+    font-family: {theme.UI_CSS};
+    font-size: 13px;
+    padding: 10px 14px;
+    border-radius: 12px;
+}}
+"""
+
+_ECHO_META_STYLE = f"""
+QLabel {{
+    color: {theme.TEXT_FAINT};
+    font-family: {theme.UI_CSS};
+    font-size: 11px;
+}}
+"""
+
 _EMPTY_HINT_STYLE = f"""
 QLabel {{
     color: {theme.TEXT_FAINT};
@@ -90,16 +116,36 @@ class ResponseWindow(QMainWindow):
 
         self._content = QWidget()
         self._content.setStyleSheet(_BACKGROUND_STYLE)
-        self._content_layout = QVBoxLayout(self._content)
+        # Outer layout centres a width-capped column; messages go into the
+        # column, not into this. Unbounded line length is the main
+        # readability killer on a wide window.
+        centering = QHBoxLayout(self._content)
+        centering.setContentsMargins(0, 0, 0, 0)
+        centering.setSpacing(0)
+
+        self._column = QWidget()
+        self._column.setStyleSheet(_BACKGROUND_STYLE)
+        self._column.setMaximumWidth(_MAX_COLUMN_WIDTH)
+        # Stretch factor, not 0: with maximumWidth alone the column sizes
+        # to its (tiny) size hint and the transcript renders in a sliver.
+        # The big factor makes it claim width up to the cap; the side
+        # stretches then split whatever is left over.
+        self._column.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        centering.addStretch(1)
+        centering.addWidget(self._column, 20)
+        centering.addStretch(1)
+
+        self._content_layout = QVBoxLayout(self._column)
         self._content_layout.setContentsMargins(0, 0, 0, 0)
         self._content_layout.setSpacing(0)
 
         # Shown until the first response lands, so a freshly-launched
         # window says what to press instead of sitting there blank.
         self._empty_hint = QLabel(
-            "No responses yet.\n\n"
-            "Queue a screenshot, insert your prompt, then send - "
-            "the bar above always shows what is currently queued."
+            "No messages yet.\n\n"
+            "Type below, or capture a screenshot with your hotkey, then press Enter."
         )
         self._empty_hint.setStyleSheet(_EMPTY_HINT_STYLE)
         self._empty_hint.setWordWrap(True)
@@ -114,7 +160,7 @@ class ResponseWindow(QMainWindow):
         # to the top, so it's always visible regardless of scroll
         # position - mirrors the settings window's "Save/Cancel always
         # reachable" pattern, just for queue visibility instead.
-        self._status_label = QLabel("Queue empty.")
+        self._status_label = QLabel("Ready.")
         self._status_label.setStyleSheet(_STATUS_IDLE)
         self._status_label.setWordWrap(True)
         self._message_count = 0
@@ -127,6 +173,14 @@ class ResponseWindow(QMainWindow):
         outer_layout.addWidget(self._status_label)
         outer_layout.addWidget(self._scroll, 1)
 
+        # Composer pinned to the bottom, outside the scroll area, so it
+        # stays put while the transcript scrolls behind it.
+        self.composer = Composer()
+        self.composer.setStyleSheet(
+            f"background-color: {theme.BG}; border-top: 1px solid {theme.BORDER};"
+        )
+        outer_layout.addWidget(self.composer, 0)
+
         self.setCentralWidget(outer)
 
         self._closing_callback: Optional[Callable[[], None]] = None
@@ -136,6 +190,17 @@ class ResponseWindow(QMainWindow):
 
         self._pending_scroll_to_bottom = False
         self._scroll.verticalScrollBar().rangeChanged.connect(self._on_scroll_range_changed)
+
+    def _drop_empty_hint(self) -> None:
+        """setParent(None) detaches it now; deleteLater() alone only queues
+        a DeferredDelete event, which plain processEvents() does not
+        dispatch - so the hint would linger above the first real entry."""
+        if self._empty_hint is None:
+            return
+        self._content_layout.removeWidget(self._empty_hint)
+        self._empty_hint.setParent(None)
+        self._empty_hint.deleteLater()
+        self._empty_hint = None
 
     def _on_scroll_range_changed(self, _minimum: int, maximum: int) -> None:
         if not self._pending_scroll_to_bottom:
@@ -200,15 +265,7 @@ class ResponseWindow(QMainWindow):
         """Append a new response block at the bottom and scroll to it.
         Must be called on the Qt main thread - callers dispatching from a
         worker thread should use a Qt signal to marshal onto it."""
-        if self._empty_hint is not None:
-            # setParent(None) detaches it now; deleteLater() alone only
-            # queues a DeferredDelete event, which plain processEvents()
-            # does not dispatch - so the hint would linger above the first
-            # real response.
-            self._content_layout.removeWidget(self._empty_hint)
-            self._empty_hint.setParent(None)
-            self._empty_hint.deleteLater()
-            self._empty_hint = None
+        self._drop_empty_hint()
 
         self._message_count += 1
         widget = MessageWidget(
@@ -228,6 +285,60 @@ class ResponseWindow(QMainWindow):
         # every time a message widget re-lays out.
         self._pending_scroll_to_bottom = True
 
+    def append_prompt_echo(self, prompt_text: str, *, image_count: int = 0) -> None:
+        """Show the prompt that was just sent, above the response it
+        produced. The composer is cleared on send, so without this there
+        would be no record of what any given answer was answering."""
+        self._drop_empty_hint()
+
+        holder = QWidget()
+        holder.setStyleSheet(_BACKGROUND_STYLE)
+        box = QVBoxLayout(holder)
+        box.setContentsMargins(18, 16, 18, 4)
+        box.setSpacing(5)
+
+        meta_bits = []
+        if image_count:
+            meta_bits.append(f"{image_count} screenshot{'s' if image_count != 1 else ''}")
+        meta_bits.append(time.strftime("%H:%M:%S"))
+        meta = QLabel("  ·  ".join(meta_bits))
+        meta.setStyleSheet(_ECHO_META_STYLE)
+        meta.setAlignment(Qt.AlignmentFlag.AlignRight)
+        box.addWidget(meta)
+
+        shown = prompt_text.strip() or "(no prompt - screenshots only)"
+        if len(shown) > 400:
+            # Long configured prompts would otherwise dominate the
+            # transcript; the full text went to Gemini either way.
+            shown = shown[:400].rstrip() + " ..."
+        bubble = QLabel(shown)
+        bubble.setStyleSheet(_PROMPT_ECHO_STYLE)
+        bubble.setWordWrap(True)
+        bubble.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        # A word-wrapping QLabel in a stretch layout picks a needlessly
+        # narrow width, so short prompts wrapped to three cramped lines.
+        # Measure the widest line and cap at that, so the bubble hugs its
+        # content and only wraps once it genuinely has to.
+        metrics = bubble.fontMetrics()
+        natural = max((metrics.horizontalAdvance(line) for line in shown.splitlines()), default=0)
+        width = min(natural + 30, int(_MAX_COLUMN_WIDTH * 0.72))
+        # Both bounds, not just the max: the leading stretch below wins any
+        # spare space, which collapses a word-wrapping label to its minimum
+        # width unless the minimum is pinned to what the text actually needs.
+        bubble.setMinimumWidth(width)
+        bubble.setMaximumWidth(int(_MAX_COLUMN_WIDTH * 0.72))
+
+        # Leading stretch so the bubble hugs the right edge and shrinks to
+        # its content - the shape a user turn has in every web chat UI.
+        bubble_row = QHBoxLayout()
+        bubble_row.setContentsMargins(0, 0, 0, 0)
+        bubble_row.addStretch(1)
+        bubble_row.addWidget(bubble, 0)
+        box.addLayout(bubble_row)
+
+        self._content_layout.insertWidget(self._content_layout.count() - 1, holder)
+        self._pending_scroll_to_bottom = True
+
     def set_queue_status(self, text: str) -> None:
         """Update the small status line pinned above the response log
         showing what's currently queued (image count + prompt preview).
@@ -239,7 +350,7 @@ class ResponseWindow(QMainWindow):
         lowered = text.lower()
         if "fail" in lowered or "no api key" in lowered:
             self._status_label.setStyleSheet(_STATUS_ERROR)
-        elif "queue empty" in lowered or "cleared" in lowered or "nothing" in lowered:
+        elif lowered.startswith("ready") or "cleared" in lowered or "nothing" in lowered:
             self._status_label.setStyleSheet(_STATUS_IDLE)
         else:
             self._status_label.setStyleSheet(_STATUS_ACTIVE)
