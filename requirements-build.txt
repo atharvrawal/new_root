@@ -1,0 +1,4 @@
+# Build-only tooling, not needed to run from source.
+#   pip install -r requirements-build.txt
+# See README.md ("Packaging") for the build command.
+pyinstaller>=6.0

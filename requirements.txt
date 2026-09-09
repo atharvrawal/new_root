@@ -1,0 +1,26 @@
+# Runtime dependencies
+
+# UI toolkit for the response window - native rich-text/Markdown
+# rendering via QTextBrowser (setMarkdown()), no browser engine.
+PySide6>=6.7
+
+# Direct Gemini API access, replacing the old webview/adapter layer.
+google-genai>=0.3.0
+
+# Screenshot capture for the queue-and-send feature. Pure ctypes on
+# Windows, no Pillow needed - see capture.py.
+mss>=9.0.1
+
+# Voice-capture feature (toggle_voice_capture hotkey, see voice.py):
+# microphone recording (streamed straight to faster-whisper in memory -
+# no intermediate WAV file) and local offline transcription.
+sounddevice>=0.4.6
+numpy>=1.24
+faster-whisper>=1.0.0
+
+# WASAPI loopback desktop-audio capture, mixed alongside the mic during
+# voice capture (see voice.py: get_stereo_mix_input_device()).
+PyAudioWPatch>=0.2.12.7
+
+# --- Build tooling (not required at runtime) --------------------------
+# Install separately, or via: pip install -r requirements-build.txt
