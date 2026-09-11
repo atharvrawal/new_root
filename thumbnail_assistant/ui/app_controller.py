@@ -12,7 +12,6 @@ from __future__ import annotations
 import base64
 import logging
 import struct
-import threading
 import time
 from pathlib import Path
 from typing import Callable, Optional
@@ -20,7 +19,7 @@ from typing import Callable, Optional
 from PySide6.QtCore import QEvent, QObject, Qt, QThread, Signal
 from PySide6.QtGui import QKeyEvent
 
-from .. import capture, constants, voice
+from .. import capture, constants
 from ..config import ConfigManager
 from ..gemini import client as gemini_client
 from ..queue_store import ImageQueue
@@ -121,10 +120,6 @@ class AppController(QObject):
         # Enter (or the send button) in the composer runs exactly the same
         # path as the send hotkey - one send implementation, two triggers.
         self._window.composer.submitted.connect(self.send_message)
-        self._voice_recorder = voice.VoiceRecorder()
-        self._mic_device_provider: Optional[Callable[[], Optional[int]]] = None
-        self._voice_prompt_provider: Optional[Callable[[], Optional[str]]] = None
-        self._voice_lock = threading.Lock()
 
         # Keep worker/thread refs alive until they finish (Qt won't do
         # this for us if they go out of scope mid-flight) - see
@@ -172,12 +167,6 @@ class AppController(QObject):
 
     def set_opacity_changed_callback(self, callback: Callable[[int], None]) -> None:
         self._window.set_opacity_changed_callback(callback)
-
-    def set_mic_device_provider(self, provider: Callable[[], Optional[int]]) -> None:
-        self._mic_device_provider = provider
-
-    def set_voice_prompt_provider(self, provider: Callable[[], Optional[str]]) -> None:
-        self._voice_prompt_provider = provider
 
     @property
     def _opacity(self):
@@ -402,69 +391,6 @@ class AppController(QObject):
         focus, so a keystroke that goes nowhere looks identical to a dead
         app."""
         self.dispatch(lambda: self._window.composer.set_capture_mode(active))
-
-    # -- voice capture, same start/stop/transcribe/send shape as before -
-    # difference: instead of sending into a DOM compose box via
-    # send_text(), it sends the transcript straight to Gemini as its own
-    # one-shot request (bypassing the image queue, matching the old
-    # behavior of not touching whatever else was mid-compose).
-    # Deliberately NOT marshaled onto the Qt main thread (unlike every
-    # other hotkey action): device enumeration and stream setup take
-    # long enough to visibly stall the UI. It touches no QWidget - only
-    # the status-line updates below are dispatched.
-    def toggle_voice_capture(self) -> None:
-        with self._voice_lock:
-            if self._voice_recorder.is_recording:
-                threading.Thread(
-                    target=self._finish_voice_capture,
-                    name="VoiceCaptureFinishThread",
-                    daemon=True,
-                ).start()
-                return
-
-            device_index = None
-            if self._mic_device_provider is not None:
-                try:
-                    device_index = self._mic_device_provider()
-                except Exception:
-                    logger.exception("mic_device_provider raised; using default input device.")
-
-            desktop_device_index = voice.get_stereo_mix_input_device()
-            if self._voice_recorder.start(device_index, desktop_device_index):
-                self._set_status("Recording... press the voice hotkey again to stop and send.")
-            else:
-                logger.warning("toggle_voice_capture: failed to start recording.")
-                self._set_status("Voice capture FAILED to start - check logs.")
-
-    def _finish_voice_capture(self) -> None:
-        self._set_status("Transcribing...")
-        transcript = self._voice_recorder.stop()
-        if not transcript:
-            logger.warning("toggle_voice_capture: no transcribable audio; nothing sent.")
-            self._set_status("No transcribable audio captured - nothing sent.")
-            return
-        template = None
-        if self._voice_prompt_provider is not None:
-            try:
-                template = self._voice_prompt_provider()
-            except Exception:
-                logger.exception("voice_prompt_provider raised; using default template.")
-        message = voice.build_stt_message(transcript, template)
-        cfg = self._config_manager.config
-        if not cfg.gemini_api_key:
-            logger.warning("_finish_voice_capture: no Gemini API key configured.")
-            self.dispatch(
-                lambda: self._window.append_response(
-                    "No Gemini API key configured. Open Settings and add one.", is_error=True
-                )
-            )
-            return
-        self._set_status("Sending transcript to Gemini...")
-        # _dispatch_send builds a QThread, so it must run on the main
-        # thread - this method runs on VoiceCaptureFinishThread.
-        self.dispatch(
-            lambda: self._dispatch_send([], message, cfg.gemini_api_key, cfg.gemini_model)
-        )
 
     def _set_status(self, text: str) -> None:
         """Update the status line from any thread."""

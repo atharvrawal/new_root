@@ -316,7 +316,7 @@ class ResponseWindow(QMainWindow):
         self._pending_scroll_to_bottom = True
 
     def set_queue_status(self, text: str) -> None:
-        """Live state (sending, recording, failures). The dedicated status
+        """Live state (sending, failures). The dedicated status
         bar that used to sit at the top of the window is gone - it only
         duplicated what the composer footer already shows, and cost a strip
         of vertical space on a window that is often deliberately small."""

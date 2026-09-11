@@ -81,7 +81,7 @@ QLabel {{
 }}
 """
 
-# Transient state (sending, recording, failures) sits on the same row as the
+# Transient state (sending, failures) sits on the same row as the
 # key hints but in full white, so it reads as the live thing and the hints
 # recede. This row replaced the old status bar at the top of the window.
 # Capture mode gets a white border and a filled badge. It has to be
@@ -298,7 +298,7 @@ class Composer(QWidget):
         self._sync_send_enabled()
 
     def set_status(self, text: str) -> None:
-        """Live state - sending, recording, a failure. Idle wording is
+        """Live state - sending, a failure. Idle wording is
         dropped rather than shown, so the row is empty when nothing is
         happening instead of saying so."""
         self._status_text = "" if text.strip().lower().startswith("ready") else text.strip()

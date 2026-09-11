@@ -91,11 +91,6 @@ class Application:
         on_main("clear_queue", ac.clear_queue)
         on_main("open_settings", self.settings_window.open)
 
-        # Not marshaled: voice capture blocks on device enumeration and
-        # stream setup, and touches no QWidget of its own (it dispatches
-        # its own status updates) - see AppController.toggle_voice_capture.
-        self.hotkey_manager.set_action("toggle_voice_capture", ac.toggle_voice_capture)
-
         # Background capture mode: every keystroke while active is typed
         # live into the queued prompt (AppController.on_capture_char) - no
         # buffering, no auto-send when toggled off.
@@ -153,12 +148,6 @@ class Application:
             self.app_controller.set_closing_callback(self._on_main_window_closing)
             self.app_controller.set_geometry_changed_callback(self._on_geometry_changed)
             self.app_controller.set_opacity_changed_callback(self._on_opacity_changed)
-            self.app_controller.set_mic_device_provider(
-                lambda: self.config_manager.config.mic_device_index
-            )
-            self.app_controller.set_voice_prompt_provider(
-                lambda: self.config_manager.config.voice_prompt_template
-            )
 
             self.hotkey_manager.start()
 

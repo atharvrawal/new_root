@@ -30,6 +30,13 @@ def _local_appdata_dir() -> Path:
 CONFIG_DIR = _appdata_dir()
 CONFIG_FILE = CONFIG_DIR / "config.json"
 
+# Tracked in the repo; copied to CONFIG_FILE on first launch only. When
+# frozen, PyInstaller unpacks --add-data files under sys._MEIPASS.
+DEFAULT_CONFIG_FILE = (
+    Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent.parent))
+    / "default_config.json"
+)
+
 LOCAL_DATA_DIR = _local_appdata_dir()
 LOG_DIR = LOCAL_DATA_DIR / "logs"
 LOG_FILE = LOG_DIR / "app.log"
@@ -49,7 +56,6 @@ DEFAULT_HOTKEYS = {
     # action_name: "modifier+modifier+key" (lowercase)
     "toggle_visibility": "ctrl+h",
     "capture_screenshot_attach": "ctrl+alt+g",
-    "toggle_voice_capture": "ctrl+alt+v",
     "move_up": "alt+up",
     "move_down": "alt+down",
     "move_left": "alt+left",
@@ -72,7 +78,6 @@ DEFAULT_HOTKEYS = {
 CORE_ACTION_LABELS = {
     "toggle_visibility": "Show / hide window",
     "capture_screenshot_attach": "Capture screenshot & queue (no send)",
-    "toggle_voice_capture": "Start/stop voice capture & send transcript to Gemini",
     "open_settings": "Open settings",
     "move_up": "Move window up",
     "move_down": "Move window down",

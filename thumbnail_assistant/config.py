@@ -29,20 +29,15 @@ class AppConfig:
     hotkeys_enabled: bool = True
     window_opacity: int = 255
 
-    # Selected microphone for the voice-capture feature (see voice.py).
-    # None means "system default input device".
-    mic_device_index: Optional[int] = None
-
     # mss monitor index for screenshot capture (see capture.py). None means
     # "use capture.py's own built-in default (_MONITOR_INDEX)".
     monitor_index: Optional[int] = None
 
     # User-customizable prompts, editable from the settings window. None
-    # means "use constants.DEFAULT_CAPTURE_PROMPT / voice.py's own
-    # default template" - kept as None rather than duplicating the
-    # default text here, so there's a single source of truth.
+    # means "use constants.DEFAULT_CAPTURE_PROMPT" - kept as None rather
+    # than duplicating the default text here, so there's a single source
+    # of truth.
     capture_prompt: Optional[str] = None
-    voice_prompt_template: Optional[str] = None
 
     # Gemini API key, used directly by gemini/client.py. Replaces the old
     # adapter/webview-session-based auth entirely.
@@ -58,7 +53,12 @@ class AppConfig:
     def from_dict(cls, data: Dict[str, Any]) -> "AppConfig":
         defaults = cls()
         merged_hotkeys = dict(constants.DEFAULT_HOTKEYS)
-        merged_hotkeys.update(data.get("hotkeys", {}) or {})
+        # Only known action names: a hotkey for a removed action (e.g. the
+        # old toggle_voice_capture) would otherwise persist forever, since
+        # the settings window saves cfg.hotkeys back as-is.
+        merged_hotkeys.update(
+            {k: v for k, v in (data.get("hotkeys") or {}).items() if k in merged_hotkeys}
+        )
         return cls(
             start_minimized=bool(data.get("start_minimized", defaults.start_minimized)),
             remember_window_position=bool(
@@ -71,18 +71,12 @@ class AppConfig:
             hotkeys=merged_hotkeys,
             hotkeys_enabled=bool(data.get("hotkeys_enabled", defaults.hotkeys_enabled)),
             window_opacity=int(data.get("window_opacity", defaults.window_opacity)),
-            mic_device_index=(
-                int(data["mic_device_index"])
-                if data.get("mic_device_index") is not None
-                else defaults.mic_device_index
-            ),
             monitor_index=(
                 int(data["monitor_index"])
                 if data.get("monitor_index") is not None
                 else defaults.monitor_index
             ),
             capture_prompt=data.get("capture_prompt", defaults.capture_prompt) or None,
-            voice_prompt_template=data.get("voice_prompt_template", defaults.voice_prompt_template) or None,
             gemini_api_key=data.get("gemini_api_key", defaults.gemini_api_key) or None,
             gemini_model=str(data.get("gemini_model", defaults.gemini_model)) or defaults.gemini_model,
         )
@@ -105,9 +99,16 @@ class ConfigManager:
 
     def _load(self) -> AppConfig:
         if not self._path.exists():
-            logger.info("No config file found at %s; using defaults.", self._path)
-            cfg = AppConfig()
-            self._path.parent.mkdir(parents=True, exist_ok=True)
+            # First launch: seed from the repo's default_config.json. Run
+            # through from_dict rather than copied raw, so stale or missing
+            # keys in it get the same cleanup as any other config.
+            try:
+                raw = json.loads(constants.DEFAULT_CONFIG_FILE.read_text(encoding="utf-8"))
+                cfg = AppConfig.from_dict(raw)
+                logger.info("No config at %s; seeded from %s.", self._path, constants.DEFAULT_CONFIG_FILE)
+            except Exception as exc:
+                logger.warning("No config at %s and default config unusable (%s); using built-in defaults.", self._path, exc)
+                cfg = AppConfig()
             self._write(cfg)
             return cfg
 

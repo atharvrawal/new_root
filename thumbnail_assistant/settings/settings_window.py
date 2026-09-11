@@ -20,7 +20,6 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 from typing import Callable, Dict, Optional
 
-from .. import voice
 from ..config import AppConfig, ConfigManager
 from ..hotkeys.win32_hotkey import HotkeyParseError, parse_hotkey
 
@@ -147,39 +146,6 @@ class SettingsWindow:
             row=1, column=1, sticky="w", padx=8, pady=4
         )
 
-        # -- Voice capture (microphone selection) ------------------------
-        voice_frame = ttk.LabelFrame(main_frame, text="Voice Capture")
-        voice_frame.pack(fill="x", **padding)
-        voice_frame.columnconfigure(1, weight=1)
-
-        ttk.Label(voice_frame, text="Microphone:").grid(
-            row=0, column=0, sticky="w", padx=8, pady=4
-        )
-
-        input_devices = voice.list_input_devices()
-        option_device_indices: list = [None] + [index for index, _label in input_devices]
-        mic_options = ["System default"] + [label for _index, label in input_devices]
-
-        current_position = 0
-        if cfg.mic_device_index is not None:
-            for position, device_index in enumerate(option_device_indices):
-                if device_index == cfg.mic_device_index:
-                    current_position = position
-                    break
-
-        mic_var = tk.StringVar(value=mic_options[current_position])
-        mic_combo = ttk.Combobox(
-            voice_frame, textvariable=mic_var, values=mic_options, state="readonly"
-        )
-        mic_combo.current(current_position)
-        mic_combo.grid(row=0, column=1, sticky="ew", padx=8, pady=4)
-        if not input_devices:
-            ttk.Label(
-                voice_frame,
-                text="No input devices detected - using system default.",
-                style="Hint.TLabel",
-            ).grid(row=1, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
-
         # -- Prompts ------------------------------------------------------
         prompts_frame = ttk.LabelFrame(main_frame, text="Prompts")
         prompts_frame.pack(fill="x", **padding)
@@ -198,32 +164,19 @@ class SettingsWindow:
             wraplength=360,
         ).grid(row=1, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 8))
 
-        ttk.Label(prompts_frame, text="Voice prompt template:").grid(
-            row=2, column=0, sticky="nw", padx=8, pady=4
-        )
-        voice_prompt_text = tk.Text(prompts_frame, height=4, wrap="word")
-        voice_prompt_text.grid(row=2, column=1, sticky="ew", padx=8, pady=4)
-        voice_prompt_text.insert("1.0", cfg.voice_prompt_template or "")
-        ttk.Label(
-            prompts_frame,
-            text='Must contain "{transcript}" - blank = built-in default template.',
-            style="Hint.TLabel",
-            wraplength=360,
-        ).grid(row=3, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
-
         ttk.Label(prompts_frame, text="Screenshot monitor index:").grid(
-            row=4, column=0, sticky="w", padx=8, pady=4
+            row=2, column=0, sticky="w", padx=8, pady=4
         )
         monitor_index_var = tk.StringVar(value=str(cfg.monitor_index) if cfg.monitor_index is not None else "")
         ttk.Entry(prompts_frame, textvariable=monitor_index_var, width=10).grid(
-            row=4, column=1, sticky="w", padx=8, pady=4
+            row=2, column=1, sticky="w", padx=8, pady=4
         )
         ttk.Label(
             prompts_frame,
             text="0 = all monitors combined, 1 = primary, 2/3/... = other monitors. Blank = default.",
             style="Hint.TLabel",
             wraplength=360,
-        ).grid(row=5, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
+        ).grid(row=3, column=0, columnspan=2, sticky="w", padx=8, pady=(0, 4))
 
         # -- Hotkeys ------------------------------------------------------
         hotkeys_frame = ttk.LabelFrame(main_frame, text="Global Hotkeys")
@@ -284,23 +237,13 @@ class SettingsWindow:
                     return False
             return True
 
-        def validate_prompts() -> bool:
-            voice_template = voice_prompt_text.get("1.0", "end").strip()
-            if voice_template and "{transcript}" not in voice_template:
-                status_var.set('Voice prompt template must contain "{transcript}".')
-                return False
-            return True
-
         def on_save():
             if not validate_hotkeys():
-                return
-            if not validate_prompts():
                 return
             merged_hotkeys = dict(cfg.hotkeys)
             merged_hotkeys.update({name: var.get().strip() for name, var in entries.items()})
 
             capture_prompt = capture_prompt_text.get("1.0", "end").strip() or None
-            voice_prompt_template = voice_prompt_text.get("1.0", "end").strip() or None
             monitor_index_raw = monitor_index_var.get().strip()
             if monitor_index_raw and not monitor_index_raw.lstrip("-").isdigit():
                 status_var.set("Monitor index must be a whole number.")
@@ -327,11 +270,7 @@ class SettingsWindow:
                 hotkeys=merged_hotkeys,
                 hotkeys_enabled=hotkeys_enabled_var.get(),
                 window_opacity=live.window_opacity,
-                mic_device_index=option_device_indices[mic_combo.current()]
-                if mic_combo.current() >= 0
-                else None,
                 capture_prompt=capture_prompt,
-                voice_prompt_template=voice_prompt_template,
                 monitor_index=monitor_index,
                 gemini_api_key=api_key_var.get().strip() or None,
                 gemini_model=model_value,

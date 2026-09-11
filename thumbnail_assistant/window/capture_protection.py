@@ -44,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 # -- Win32 constants (winuser.h) --------------------------------------------
 WDA_NONE = 0x00000000
+WDA_MONITOR = 0x00000001  # Windows 7+: window captured as solid black
 WDA_EXCLUDEFROMCAPTURE = 0x00000011  # requires Windows 10 2004 (build 19041)+
 
 _MIN_BUILD_FOR_EXCLUDE_FROM_CAPTURE = 19041
@@ -106,12 +107,12 @@ def _set_affinity(hwnd: int, affinity: int, *, context: str) -> bool:
 
     if affinity == WDA_EXCLUDEFROMCAPTURE and not _supports_exclude_from_capture():
         logger.warning(
-            "Capture protection unavailable on this version of Windows "
-            "(build %s; requires build %s or later).",
+            "Build %s predates WDA_EXCLUDEFROMCAPTURE (needs %s); falling back to "
+            "WDA_MONITOR - the window will appear as a black box in captures.",
             _windows_build_number(),
             _MIN_BUILD_FOR_EXCLUDE_FROM_CAPTURE,
         )
-        return False
+        affinity = WDA_MONITOR
 
     try:
         success = bool(user32.SetWindowDisplayAffinity(hwnd, affinity))

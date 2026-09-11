@@ -1,5 +1,5 @@
 """Self-check for the pure logic in this app: hotkey parsing, the queue,
-config round-tripping, PNG header parsing, and STT message formatting.
+config round-tripping, and PNG header parsing.
 
 Deliberately no framework and no fixtures - run it directly:
 
@@ -9,11 +9,14 @@ Everything here is GUI-free, thread-free and network-free, so it runs in
 under a second. The Qt/Win32/Gemini paths are not covered; those need the
 real app running (see README.md's "Verifying it works" section).
 """
+import json
 import struct
 import sys
+import tempfile
+from pathlib import Path
 
-from thumbnail_assistant import constants, voice
-from thumbnail_assistant.config import AppConfig
+from thumbnail_assistant import constants
+from thumbnail_assistant.config import AppConfig, ConfigManager
 from thumbnail_assistant.hotkeys.win32_hotkey import (
     _vk_to_text,
     MOD_ALT,
@@ -132,6 +135,29 @@ def test_config_roundtrip():
     assert empty.gemini_model == defaults.gemini_model
 
 
+def test_first_launch_seeds_from_default_config():
+    """No AppData config yet -> copy default_config.json; after that the
+    AppData copy wins, even if the default changes."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        default, live = tmp / "default_config.json", tmp / "appdata" / "config.json"
+        default.write_text(json.dumps({"window_width": 777}), encoding="utf-8")
+        original = constants.DEFAULT_CONFIG_FILE
+        constants.DEFAULT_CONFIG_FILE = default
+        try:
+            assert ConfigManager(live).config.window_width == 777
+            assert live.exists()
+            default.write_text(json.dumps({"window_width": 111}), encoding="utf-8")
+            assert ConfigManager(live).config.window_width == 777
+
+            # Missing default -> built-in defaults, no crash.
+            constants.DEFAULT_CONFIG_FILE = tmp / "nope.json"
+            fresh = ConfigManager(tmp / "other" / "config.json")
+            assert fresh.config.window_width == AppConfig().window_width
+        finally:
+            constants.DEFAULT_CONFIG_FILE = original
+
+
 def test_png_dimensions():
     header = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8 + struct.pack(">II", 1920, 1080)
     assert _png_dimensions(header) == (1920, 1080)
@@ -139,12 +165,12 @@ def test_png_dimensions():
     assert _png_dimensions(b"") is None
 
 
-def test_stt_message():
-    assert "hi there" in voice.build_stt_message("hi there")
-    assert voice.build_stt_message("x", "Q: {transcript}") == "Q: x"
-    # A custom template missing the placeholder must append rather than
-    # silently drop the transcript.
-    assert "x" in voice.build_stt_message("x", "no placeholder here")
+def test_config_drops_removed_hotkeys():
+    """An old config.json still carrying a removed action (voice capture)
+    must not keep it alive - the settings window would save it back."""
+    cfg = AppConfig.from_dict({"hotkeys": {"toggle_voice_capture": "ctrl+alt+v"}})
+    assert "toggle_voice_capture" not in cfg.hotkeys
+    assert set(cfg.hotkeys) == set(constants.DEFAULT_HOTKEYS)
 
 
 def main():

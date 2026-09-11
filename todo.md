@@ -32,8 +32,6 @@ Kept here so the next person doesn't re-diagnose them.
 - Default screenshot monitor was index 2 — nonexistent on a single-monitor
   machine, silently falling back to the combined virtual screen. Now 1
   (primary), matching the documented intent.
-- Voice capture gave no UI feedback at all, and silently dropped the transcript
-  when no API key was configured. Both now report through the status line.
 - **No way to discard a queue without sending it.** Added `clear_queue`
   (`Capslock+Backspace`), which `ImageQueue.clear()` already existed for.
 - Live-typed characters in background capture mode did not update the status
@@ -61,34 +59,15 @@ Kept here so the next person doesn't re-diagnose them.
 
 ## 1. Packaging (the one real gap)
 
-`main.py` advertises a PyInstaller executable and there is no `.spec` file.
-`pyinstaller --windowed main.py` will build, but the result almost certainly
-breaks on the voice path: `ctranslate2`'s CUDA/cuBLAS DLLs are loaded lazily by
-filename at first inference, so PyInstaller has no import to trace and won't
-bundle them.
+`main.py` advertises a PyInstaller executable but it has never been built.
+With voice capture gone there are no lazily-loaded native DLLs left, so
+`pyinstaller --windowed main.py` should just work — but nobody has checked.
 
-- [ ] Write `ThumbnailAssistant.spec` with `collect_dynamic_libs("ctranslate2")`
-      and the `nvidia-cublas-cu12` / `nvidia-cudnn-cu12` wheels, plus
-      `collect_data_files` for `faster_whisper`.
-- [ ] Build and test the frozen exe with the GPU path and with CUDA absent —
-      `voice.py: _register_nvidia_dll_dirs` already has a frozen-mode branch
-      that checks `sys._MEIPASS`, but it has never been exercised.
+- [ ] Build it and run the exe on a clean machine.
 - [ ] Confirm logging still works windowed (`_is_frozen_windowed` disables the
       console handler; the file handler must still land in `%LOCALAPPDATA%`).
 
-Expect a multi-GB bundle. If that is unacceptable, ship without voice capture
-and make `faster-whisper` an optional extra — the import is already guarded.
-
-## 2. First voice capture looks like a hang
-
-The `small.en` model (~500 MB) downloads on first use, inside the transcription
-worker. Recording works, but after you stop, the status line sits on
-"Transcribing..." for however long the download takes, with no progress.
-
-- [ ] Preload the model at startup on a background thread, or surface download
-      progress in the status line. `voice.py: _get_model` is the single door.
-
-## 3. No timeout on the Gemini call
+## 2. No timeout on the Gemini call
 
 `gemini/client.py` calls `generate_content` with whatever the SDK's default
 timeout is. If the network stalls, the worker `QThread` blocks indefinitely and
@@ -97,7 +76,7 @@ the status line stays on "Sending..." with no way to cancel.
 - [ ] Pass an explicit timeout via `http_options`, and surface a cancel or at
       least a timed-out error bubble.
 
-## 4. API key is stored in plaintext
+## 3. API key is stored in plaintext
 
 `%APPDATA%\ThumbnailAssistant\config.json` holds the key in the clear, and
 `config.json.bak` keeps a copy whenever the file fails to parse.
@@ -106,7 +85,7 @@ the status line stays on "Sending..." with no way to cancel.
       dependency) or read it from an environment variable and document that the
       file is only as protected as the user profile.
 
-## 5. Smaller things
+## 4. Smaller things
 
 - [ ] **Two UI toolkits**: the main window is PySide6, the settings dialog is
       tkinter on its own thread with its own mainloop. It works, but it's an
@@ -122,7 +101,7 @@ the status line stays on "Sending..." with no way to cancel.
 
 ## Not planned
 
-- Streaming/partial transcripts in the UI while dictating.
+- Voice capture / any audio recording — removed; not coming back.
 - Conversation history — every send is deliberately one-shot and independent.
 - A tray icon or background residency — closing the window exits the process,
   by design.

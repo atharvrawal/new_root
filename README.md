@@ -1,28 +1,52 @@
 # Thumbnail Assistant
 
 A frameless, always-on-top, screen-capture-excluded desktop overlay for Windows.
-Global hotkeys queue screenshots and prompt text (typed or dictated), send the
+Global hotkeys queue screenshots and prompt text, send the
 whole batch to the Gemini API in one request, and render the response as
 markdown in a scrollable log — without ever stealing focus from whatever is on
 screen.
 
 ## Requirements
 
-- Windows 10 build 19041 (2004) or later — `WDA_EXCLUDEFROMCAPTURE`, used for
-  the capture exclusion, does not exist on earlier builds.
+- Windows 10 build 19041 (2004) or later for full capture exclusion
+  (`WDA_EXCLUDEFROMCAPTURE`). Earlier builds fall back to `WDA_MONITOR`: the
+  window shows up in captures as a black box instead of being omitted.
 - Python 3.10+ (developed and verified on 3.13).
 - A Gemini API key: <https://aistudio.google.com/apikey>
 
 ## Install and run
 
-```
-pip install -r requirements.txt
-python main.py
-```
+1. **Install Python** (64-bit, 3.10+) from <https://www.python.org/downloads/>.
+   In the installer, tick **"Add python.exe to PATH"**, and leave
+   **"tcl/tk and IDLE"** ticked — the Settings window needs it.
 
-On first run the window appears with an empty response log. Press
-**Ctrl+Alt+S** to open Settings and paste in your Gemini API key — nothing can
-be sent until you do.
+2. **Open a terminal in this folder** and install the dependencies
+   (`PySide6`, `google-genai`, `mss` — see `requirements.txt`):
+
+   ```
+   pip install -r requirements.txt
+   ```
+
+   If `pip` is not recognized, use `py -m pip install -r requirements.txt`
+   instead.
+
+   Optional, to keep these out of your global Python: create a virtual
+   environment first, then run the `pip install` above inside it.
+
+   ```
+   python -m venv .venv
+   .venv\Scripts\activate
+   ```
+
+3. **Run it:**
+
+   ```
+   python main.py
+   ```
+
+On first run the settings are seeded from `default_config.json` into
+`%APPDATA%\ThumbnailAssistant\config.json`. Press **Ctrl+Alt+S** to open
+Settings and paste in your Gemini API key — nothing can be sent until you do.
 
 ## How it works
 
@@ -49,14 +73,9 @@ you explicitly send, and sending clears the queue.
 The input box is the prompt: whatever it holds is what gets sent, whether you
 typed it there directly or a hotkey put it there. It grows as you type and
 scrolls once it gets tall. The row beneath it carries everything else — how
-many screenshots are attached, and live state such as sending, recording or a
-failure. Screenshots are a count, never a preview. `Capslock+Backspace` throws
-away the queue and clears the box.
-
-Voice capture (`Ctrl+Alt+V`) is separate: it records the mic (mixed with desktop
-audio via WASAPI loopback, when available), transcribes locally with
-faster-whisper *while you are still talking*, and on the second press sends the
-transcript to Gemini as its own request — it does not touch the image queue.
+many screenshots are attached, and live state such as sending or a failure.
+Screenshots are a count, never a preview. `Capslock+Backspace` throws away the
+queue and clears the box.
 
 ### Default hotkeys
 
@@ -68,7 +87,6 @@ transcript to Gemini as its own request — it does not touch the image queue.
 | Background capture mode (type live) | `Capslock+T` |
 | Send queued batch to Gemini | `Capslock+Enter` |
 | Discard the queue | `Capslock+Backspace` |
-| Voice capture start / stop | `Ctrl+Alt+V` |
 | Focus window (to click / scroll) | `Ctrl+Alt+F` |
 | Open settings | `Ctrl+Alt+S` |
 | Move window | `Alt+arrows` |
@@ -86,7 +104,7 @@ bound to `capslock` (nothing, by default).
 
 | | |
 | --- | --- |
-| Config | `%APPDATA%\ThumbnailAssistant\config.json` |
+| Config | `%APPDATA%\ThumbnailAssistant\config.json` — seeded from the repo's `default_config.json` on first launch, then independent of it |
 | Logs | `%LOCALAPPDATA%\ThumbnailAssistant\logs\app.log` |
 | Debug screenshots | `%LOCALAPPDATA%\ThumbnailAssistant\debug_screenshots\` |
 
@@ -104,7 +122,7 @@ python test_basics.py
 ```
 
 Covers the GUI-free logic: hotkey parsing, the queue, config round-tripping, PNG
-header parsing, STT framing. The Qt window, the Win32 chrome, the keyboard hook
+header parsing. The Qt window, the Win32 chrome, the keyboard hook
 and the Gemini call need the real app — run `python main.py`, press
 `Ctrl+Alt+G` then `Capslock+Enter`, and check `app.log` if nothing appears.
 
@@ -120,8 +138,8 @@ each text/vision model and reports OK / quota-blocked / unavailable.
 
 ## Limitations
 
-- **Windows only.** The hotkey hook, capture exclusion, taskbar hiding, opacity
-  and desktop-audio loopback are all Win32-specific.
+- **Windows only.** The hotkey hook, capture exclusion, taskbar hiding and opacity
+  are all Win32-specific.
 - **Capture exclusion is not DRM.** It removes the window from the DWM
   compositor's output, which covers the Windows Graphics Capture API,
   `BitBlt`/`PrintWindow`, and the conferencing tools built on them. It does not
@@ -136,10 +154,7 @@ each text/vision model and reports OK / quota-blocked / unavailable.
 
 ```
 pip install -r requirements-build.txt
-pyinstaller --noconfirm --windowed --name ThumbnailAssistant main.py
+pyinstaller --noconfirm --windowed --name ThumbnailAssistant --add-data "default_config.json;." main.py
 ```
 
-Untested as of this writing — the faster-whisper/ctranslate2 CUDA DLLs need
-`collect_dynamic_libs` entries in a `.spec` file to survive freezing (see
-`voice.py: _register_nvidia_dll_dirs`, which already handles the frozen case at
-runtime). See `todo.md`.
+Untested as of this writing. See `todo.md`.

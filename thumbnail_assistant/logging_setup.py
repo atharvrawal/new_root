@@ -60,9 +60,9 @@ def configure_logging(console: bool = True, level: int = logging.INFO) -> None:
             pass
 
     # Quiet down noisy third-party loggers. google-genai logs every HTTP
-    # request at INFO through httpx, and faster-whisper logs per-segment
-    # detail - both would bury this app's own lines in app.log.
-    for noisy in ("httpx", "httpcore", "google_genai", "faster_whisper", "urllib3"):
+    # request at INFO through httpx, which would bury this app's own lines
+    # in app.log.
+    for noisy in ("httpx", "httpcore", "google_genai", "urllib3"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
     _CONFIGURED = True
